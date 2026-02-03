@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>PUBG Mobile HTML5 - Full Version</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #000; }
+        /* Tâm súng */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 20px; height: 20px; border: 2px solid rgba(0, 255, 0, 0.8);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            pointer-events: none; z-index: 10;
+        }
+        /* Hiệu ứng trúng đạn */
+        #bloodOverlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 30%, rgba(200, 0, 0, 0.6) 100%);
+            display: none; pointer-events: none; z-index: 6;
+        }
+        #damageOverlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 255, 0.2); display: none; pointer-events: none; z-index: 5;
+        }
+        /* HUD */
+        #hud {
+            position: absolute; bottom: 30px; left: 30px;
+            color: white; background: rgba(0,0,0,0.7); padding: 20px;
+            border-radius: 15px; border-left: 5px solid #ffcc00; z-index: 10;
+        }
+        #healthBar { width: 250px; height: 15px; background: #333; border-radius: 10px; margin-top: 10px; overflow: hidden; }
+        #healthInner { width: 100%; height: 100%; background: #4caf50; transition: 0.3s; }
+        #instructions {
+            position: absolute; top: 20px; left: 20px;
+            color: white; background: rgba(0,0,0,0.6); padding: 15px; border-radius: 10px;
+        }
+        #msg {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ff0000; font-size: 50px; font-weight: bold; display: none; text-shadow: 2px 2px #000;
+        }
+    </style>
+</head>
+<body>
+    <div id="crosshair"></div>
+    <div id="bloodOverlay"></div>
+    <div id="damageOverlay"></div>
+    <div id="msg">BẠN ĐÃ CHẾT</div>
+    
+    <div id="instructions">
+        <b>DI CHUYỂN:</b> W, A, S, D | <b>NHẢY:</b> SPACE<br>
+        <b>BẮN:</b> CHUỘT TRÁI | <b>NẠP ĐẠN:</b> R | <b>NHẶT ĐỒ:</b> E
+    </div>
+    
+    <div id="hud">
+        <div id="ammo" style="font-size: 24px; font-weight: bold;">ĐẠN: 15 / 90</div>
+        MÁU: <div id="healthBar"><div id="healthInner"></div></div>
+    </div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- KHỞI TẠO CƠ BẢN ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+        scene.fog = new THREE.Fog(0x87ceeb, 20, 100);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Biến trạng thái
+        let hp = 100, ammo = 15, reserve = 90, isDead = false;
+        let vY = 0, onGround = true, zoneR = 60;
+        let keys = {};
+
+        // --- ÁNH SÁNG & ĐỊA HÌNH ---
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(10, 20, 10);
+        scene.add(sun);
+
+        // Tạo địa hình (Terrain) nhấp nhô
+        const planeGeo = new THREE.PlaneGeometry(200, 200, 50, 50);
+        const vertices = planeGeo.attributes.position.array;
+        for (let i = 0; i < vertices.length; i += 3) {
+            vertices[i+2] = Math.sin(vertices[i]/5) * Math.cos(vertices[i+1]/5) * 1.5; // Tạo đồi núi
+        }
+        planeGeo.computeVertexNormals();
+        const ground = new THREE.Mesh(planeGeo, new THREE.MeshStandardMaterial({ color: 0x3d5e3a }));
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        function getGroundHeight(x, z) {
+            return Math.sin(x/5) * Math.cos(z/5) * 1.5 + 1.6;
+        }
+
+        // --- SÚNG & TIA LỬA ---
+        const gunGroup = new THREE.Group();
+        const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.5), new THREE.MeshStandardMaterial({ color: 0x111 }));
+        const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
+        muzzle.position.z = -0.3;
+        muzzle.visible = false;
+        gunGroup.add(gunBody, muzzle);
+        gunGroup.position.set(0.35, -0.3, -0.6);
+        camera.add(gunGroup);
+        scene.add(camera);
+
+        // --- VÒNG BO ---
+        const zoneGeo = new THREE.TorusGeometry(zoneR, 0.2, 16, 100);
+        const zoneMat = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+        const zone = new THREE.Mesh(zoneGeo, zoneMat);
+        zone.rotation.x = Math.PI/2;
+        scene.add(zone);
+
+        // --- BOT AI & LOOT ---
+        const enemies = [], loots = [];
+        class Enemy {
+            constructor(x, z) {
+                this.mesh = new THREE.Group();
+                const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 1, 4, 8), new THREE.MeshStandardMaterial({ color: 0xff3333 }));
+                this.mesh.add(body);
+                this.mesh.position.set(x, 1, z);
+                this.hp = 60;
+                this.lastShot = 0;
+                scene.add(this.mesh);
+            }
+            update() {
+                const d = this.mesh.position.distanceTo(camera.position);
+                if (d < 20) {
+                    this.mesh.lookAt(camera.position.x, 1, camera.position.z);
+                    if (Date.now() - this.lastShot > 2000) {
+                        if (Math.random() < 0.4) hitPlayer(10);
+                        this.lastShot = Date.now();
+                    }
+                }
+            }
+        }
+
+        function spawnLoot(x, z) {
+            const type = Math.random() > 0.5 ? 'ammo' : 'hp';
+            const item = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: type==='ammo'?0xffff00:0x00ff00 }));
+            item.position.set(x, 0.5, z);
+            scene.add(item);
+            loots.push({ mesh: item, type });
+        }
+
+        for(let i=0; i<10; i++) {
+            enemies.push(new Enemy(Math.random()*80-40, Math.random()*80-40));
+            spawnLoot(Math.random()*80-40, Math.random()*80-40);
+        }
+
+        // --- LOGIC TƯƠNG TÁC ---
+        function hitPlayer(dmg) {
+            if (isDead) return;
+            hp -= dmg;
+            document.getElementById('bloodOverlay').style.display = 'block';
+            setTimeout(() => { document.getElementById('bloodOverlay').style.display = 'none'; }, 100);
+            updateUI();
+            if (hp <= 0) gameOver();
+        }
+
+        function updateUI() {
+            document.getElementById('healthInner').style.width = Math.max(0, hp) + '%';
+            document.getElementById('ammo').innerText = `ĐẠN: ${ammo} / ${reserve}`;
+        }
+
+        function gameOver() { isDead = true; document.getElementById('msg').style.display = 'block'; document.exitPointerLock(); }
+
+        // --- ĐIỀU KHIỂN & BẮN ---
+        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+        document.addEventListener('mousedown', () => {
+            if (document.pointerLockElement !== document.body || ammo <= 0 || isDead) return;
+            ammo--;
+            updateUI();
+            
+            // Recoil & Muzzle Flash
+            muzzle.visible = true;
+            gunGroup.position.z += 0.05;
+            camera.rotation.x += 0.02;
+            setTimeout(() => { muzzle.visible = false; gunGroup.position.z -= 0.05; }, 50);
+
+            const ray = new THREE.Raycaster();
+            ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const hits = ray.intersectObjects(enemies.map(e => e.mesh));
+            if (hits.length > 0) {
+                const e = enemies.find(en => en.mesh === hits[0].object.parent);
+                if (e) {
+                    e.hp -= 20;
+                    if (e.hp <= 0) { scene.remove(e.mesh); enemies.splice(enemies.indexOf(e), 1); }
+                }
+            }
+        });
+
+        // Nhặt đồ & Nạp đạn
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyR' && reserve > 0) {
+                let need = 15 - ammo;
+                let take = Math.min(need, reserve);
+                ammo += take; reserve -= take; updateUI();
+            }
+            if (e.code === 'KeyE') {
+                loots.forEach((l, i) => {
+                    if (camera.position.distanceTo(l.mesh.position) < 2.5) {
+                        if (l.type === 'ammo') reserve += 30; else hp = Math.min(100, hp + 30);
+                        scene.remove(l.mesh); loots.splice(i, 1); updateUI();
+                    }
+                });
+            }
+        });
+
+        document.addEventListener('click', () => !isDead && document.body.requestPointerLock());
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === document.body) {
+                camera.rotation.y -= e.movementX * 0.002;
+                camera.rotation.x -= e.movementY * 0.002;
+                camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x));
+            }
+        });
+
+        // --- VÒNG LẶP CHÍNH (GAME LOOP) ---
+        function animate() {
+            requestAnimationFrame(animate);
+            if (isDead) return;
+
+            // Di chuyển
+            const speed = keys['ShiftLeft'] ? 0.2 : 0.12;
+            if (keys['KeyW']) camera.translateZ(-speed);
+            if (keys['KeyS']) camera.translateZ(speed);
+            if (keys['KeyA']) camera.translateX(-speed);
+            if (keys['KeyD']) camera.translateX(speed);
+
+            // Nhảy & Trọng lực
+            vY -= 0.008;
+            camera.position.y += vY;
+            const h = getGroundHeight(camera.position.x, camera.position.z);
+            if (camera.position.y <= h) {
+                camera.position.y = h; vY = 0; onGround = true;
+            }
+            if (keys['Space'] && onGround) { vY = 0.15; onGround = false; }
+
+            // Cập nhật AI
+            enemies.forEach(e => e.update());
+
+            // Vòng bo thu nhỏ
+            zoneR -= 0.003;
+            zone.geometry.dispose();
+            zone.geometry = new THREE.TorusGeometry(zoneR, 0.1, 16, 100);
+            
+            const dist = Math.sqrt(camera.position.x**2 + camera.position.z**2);
+            if (dist > zoneR) {
+                hitPlayer(0.05);
+                document.getElementById('damageOverlay').style.display = 'block';
+            } else {
+                document.getElementById('damageOverlay').style.display = 'none';
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        updateUI();
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
